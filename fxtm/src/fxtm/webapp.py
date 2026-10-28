@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import tempfile
 import threading
 import traceback
 import webbrowser
@@ -22,6 +23,7 @@ from fxtm.analytics import EquityRecorder, performance, trades_frame
 from fxtm.broker import AccountConfig, Broker, BrokerError, fixed_rates, replay_rates, split_symbol
 from fxtm.compare import widen_spread
 from fxtm.history import config_meta, save_run
+from fxtm.importer import ImportedProvider, import_file, list_datasets
 from fxtm.providers import DukascopyProvider
 from fxtm.replay import Replay
 from fxtm.session import Session
@@ -30,6 +32,7 @@ from fxtm.ticks import FxtmError, normalize_symbol, to_utc
 
 MAX_DAYS = 7
 MAX_CANDLES = 3000
+MAX_UPLOAD_BYTES = 1 << 30
 WEB_DIR = Path(__file__).parent / "web"
 STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -69,7 +72,9 @@ def _opt_float(value):
 class App:
     def __init__(self, data_dir=None, store: TickStore | None = None):
         self.data_dir = Path(data_dir or default_data_dir())
-        self.store = store or TickStore(self.data_dir, DukascopyProvider())
+        self.store = store or TickStore(
+            self.data_dir, DukascopyProvider(cache_dir=self.data_dir / "raw" / "dukascopy"))
+        self.import_store = TickStore(self.data_dir, ImportedProvider(self.data_dir))
         self.lock = threading.RLock()
         self.status = {"state": "idle", "message": ""}
         self.params: dict | None = None
@@ -77,10 +82,16 @@ class App:
         self._tick_cache: dict = {}
 
     # ---- session setup -----------------------------------------------------
-    def _load(self, symbol: str, start, end, label: str):
+    def _load(self, store: TickStore, symbol: str, start, end, label: str):
         def progress(day, n):
             self.status = {"state": "loading", "message": f"{label} {day}: {n:,} ticks"}
-        return self.store.load(symbol, start, end, progress=progress)
+
+        def hour_progress(done, total, hour):
+            self.status = {"state": "loading", "message": f"{label} {hour:%Y-%m-%d %H}h ({done}/{total})"}
+
+        if hasattr(store.provider, "progress"):
+            store.provider.progress = hour_progress
+        return store.load(symbol, start, end, progress=progress)
 
     def start(self, params: dict) -> dict:
         symbol = normalize_symbol(params["symbol"])
@@ -103,24 +114,33 @@ class App:
         }
         if parsed["balance"] <= 0 or parsed["leverage"] < 1:
             raise ValueError("Balance must be positive and leverage at least 1.")
-        self.status = {"state": "loading", "message": f"Downloading {symbol}..."}
+        use_imported = bool(params.get("use_imported"))
+        store = self.import_store if use_imported else self.store
+        parsed["source"] = "imported" if use_imported else self.store.provider.name
+        self.status = {"state": "loading", "message": f"Loading {symbol}..."}
         try:
-            ticks = self._load(symbol, start, end, symbol)
+            ticks = self._load(store, symbol, start, end, symbol)
             if ticks.empty:
+                if use_imported:
+                    raise FxtmError(
+                        f"None of your imported files for {symbol} covers this period. "
+                        "Import a file for it, or untick 'Use my imported data'.")
                 raise FxtmError(
                     "No ticks in this period. It may be a weekend or holiday, or the "
                     "data source has no data for this pair and date.")
             aux_symbol, aux_ticks = None, None
             if quote != currency and parsed["fixed_rate"] is None:
                 for candidate in (f"{quote}{currency}", f"{currency}{quote}"):
-                    found = self._load(candidate, start - timedelta(days=1), end, candidate)
+                    found = self._load(store, candidate, start - timedelta(days=1), end, candidate)
                     if not found.empty:
                         aux_symbol, aux_ticks = candidate, found
                         break
                 if aux_symbol is None:
                     raise FxtmError(
-                        f"No data to convert {quote} to {currency}. Enter a fixed conversion "
-                        f"rate ({currency} per 1 {quote}) or use another account currency.")
+                        f"No data to convert {quote} to {currency}"
+                        + (" in your imported files" if use_imported else "")
+                        + f". Enter a fixed conversion rate ({currency} per 1 {quote}) "
+                        "under 'Trading conditions' or use another account currency.")
             self.params = parsed
             self._source = {"ticks": ticks, "aux_symbol": aux_symbol, "aux_ticks": aux_ticks}
             with self.lock:
@@ -287,6 +307,14 @@ class App:
         return self._act(lambda c: c["broker"].cancel(int(body["id"])),
                          body.get("tf", "1m"), body.get("since"))
 
+    # ---- own data files ------------------------------------------------------
+    def datasets(self) -> list:
+        return _clean([{**d, "ticks": d["ticks"]} for d in list_datasets(self.data_dir)])
+
+    def import_upload(self, source_path: str, symbol: str, timezone: str) -> dict:
+        info = import_file(self.data_dir, symbol, source_path, timezone)
+        return _clean(info)
+
     # ---- results -------------------------------------------------------------
     def report(self) -> dict:
         with self.lock:
@@ -304,7 +332,7 @@ class App:
             c = self._need()
             p = self.params
             meta = config_meta(
-                c["broker"], provider=self.store.provider.name, symbol=c["symbol"],
+                c["broker"], provider=p["source"], symbol=c["symbol"],
                 start=p["start"].isoformat(), end=p["end"].isoformat(),
                 extra_spread_pips=p["extra_spread_pips"], conversion_pair=c["aux_symbol"],
                 fixed_rate=p["fixed_rate"], replay_position=c["replay"].now.isoformat())
@@ -351,6 +379,29 @@ def make_handler(app: App, port: int):
                 traceback.print_exc()
                 self._json(500, {"error": "Internal error. See the terminal for details."})
 
+        def _upload(self, query) -> dict:
+            """Receive a CSV as the raw request body, import it, and delete the temporary copy."""
+            symbol = (query.get("symbol") or [""])[0]
+            timezone = (query.get("timezone") or ["UTC"])[0]
+            length = int(self.headers.get("Content-Length") or 0)
+            if not symbol:
+                raise ValueError("Enter the currency pair of the file first.")
+            if length <= 0:
+                raise ValueError("The file is empty.")
+            if length > MAX_UPLOAD_BYTES:
+                raise ValueError("The file is larger than 1 GB. Split it by month and import the parts.")
+            with tempfile.TemporaryDirectory() as tmp:
+                target = Path(tmp) / "upload.csv"
+                with open(target, "wb") as out:
+                    remaining = length
+                    while remaining > 0:
+                        chunk = self.rfile.read(min(1 << 20, remaining))
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        remaining -= len(chunk)
+                return app.import_upload(str(target), symbol, timezone)
+
         def do_GET(self):
             url = urlparse(self.path)
             if url.path in STATIC:
@@ -366,6 +417,8 @@ def make_handler(app: App, port: int):
                 return self._guard(lambda: app.state(query.get("tf", "1m"), since))
             if url.path == "/api/report":
                 return self._guard(app.report)
+            if url.path == "/api/datasets":
+                return self._guard(lambda: {"datasets": app.datasets()})
             self._json(404, {"error": "Not found"})
 
         def do_POST(self):
@@ -376,6 +429,8 @@ def make_handler(app: App, port: int):
                 "/api/order": app.order, "/api/close": app.close, "/api/modify": app.modify,
                 "/api/cancel": app.cancel, "/api/save": lambda body: app.save(),
             }
+            if url.path == "/api/import":
+                return self._guard(lambda: self._upload(parse_qs(url.query)))
             handler = routes.get(url.path)
             if handler is None:
                 return self._json(404, {"error": "Not found"})

@@ -1,4 +1,4 @@
-# FX Time Machine (fxtm) "FX Warrior Milk-chan"
+# FX Time Machine (fxtm)  "FX Warrior Milk-chan"
 
 Replay the forex market of any past moment and practice trading it with virtual money. Free, MIT licensed,
 no accounts, runs on your own computer and works offline once the data is downloaded.
@@ -49,12 +49,44 @@ Other commands:
 fxtm serve --port 9000 --no-browser     # another port, do not open a tab
 fxtm fetch EUR/CHF 2015-01-15           # download and cache one UTC day
 fxtm candles EUR/CHF 2015-01-15 --tf 5m # print candles (or --out file.csv)
+fxtm import export.csv EUR/CHF          # use a tick CSV you downloaded yourself
+fxtm imports                            # list imported datasets
 python -m fxtm --version
 ```
 
 Downloaded data and saved runs live in your user data folder (`~/.local/share/fxtm` on Linux,
 `~/Library/Application Support/fxtm` on macOS, `%LOCALAPPDATA%\fxtm` on Windows). Set `FXTM_DATA_DIR` or use
 `--data-dir` to put them elsewhere.
+
+## If the download does not work
+
+Dukascopy's free historical feed has been unreliable since July 2026: independent projects report timeouts,
+HTTP 503 and, more recently, a bot-protection challenge (HTTP 202) that blocks scripts while a normal browser
+can still get through. The data format itself has not changed. fxtm retries, tells you which of these
+happened, and never stores an empty weekday as if the market had been quiet. Each hour that downloads
+correctly is kept (in the `raw` folder of the data directory) and hours that fail are retried in further
+rounds, so if a few hours still fail, pressing start again continues from there instead of starting over. When the feed is down, use your
+own data files.
+
+### Your own data files
+
+1. Export ticks to a CSV file yourself, for example in your browser from Dukascopy's historical data page, or
+   with the `dukascopy-node` tool. Any CSV with a time, a bid and an ask column works. Headers such as
+   `Gmt time,Ask,Bid,AskVolume,BidVolume` and `timestamp,askPrice,bidPrice` are recognised; without a header
+   the order time, ask, bid, ask volume, bid volume is assumed. Times can be ISO, `15.01.2015 09:30:00.123`
+   or epoch seconds/milliseconds.
+2. In the browser app open "Your own data files", choose the file, say which time zone its times are in
+   (UTC unless the export used another), and press "Import for the pair above". Or use the command line:
+
+   ```bash
+   fxtm import export.csv EUR/CHF --timezone UTC
+   fxtm imports                      # list what you imported
+   ```
+3. Tick "Use my imported data" (clicking an imported dataset fills the pair and period for you) and start.
+
+Imported files stay on your computer, are never uploaded anywhere, and are kept apart from downloaded data.
+If your account currency differs from the pair's quote currency, either import the conversion pair too
+(for example CHF/JPY) or enter a fixed conversion rate under "Trading conditions".
 
 ## How the simulation works
 
@@ -120,6 +152,8 @@ slippage; `fxtm.history.save_run` stores a run in SQLite together with the condi
 - A session covers at most 7 days of ticks.
 - Prices have 5 decimals, or 3 for JPY quotes. Metals and other instruments are not supported yet.
 - Dukascopy's data availability depends on the pair and the date. Weekends and holidays have no ticks.
+- The online feed is currently unreliable (see "If the download does not work"); the project's tests use synthetic
+  data, so the live feed is checked by hand before each release.
 
 ## Development
 

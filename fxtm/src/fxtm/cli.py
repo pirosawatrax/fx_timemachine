@@ -1,9 +1,10 @@
-"""Command line interface: ``fxtm serve``, ``fxtm fetch`` and ``fxtm candles``."""
+"""Command line interface: ``serve``, ``fetch``, ``candles``, ``import`` and ``imports``."""
 from __future__ import annotations
 
 import argparse
 import sys
 from datetime import timedelta
+from pathlib import Path
 
 from fxtm import __version__
 from fxtm.candles import PRICE_SOURCES, TIMEFRAMES, build_candles
@@ -19,7 +20,8 @@ def _range(args):
 
 
 def _store(args) -> TickStore:
-    return TickStore(args.data_dir or default_data_dir(), DukascopyProvider())
+    root = args.data_dir or default_data_dir()
+    return TickStore(root, DukascopyProvider(cache_dir=Path(root) / "raw" / "dukascopy"))
 
 
 def _cmd_fetch(args) -> int:
@@ -47,6 +49,27 @@ def _cmd_candles(args) -> int:
     return 0
 
 
+def _cmd_import(args) -> int:
+    from fxtm.importer import import_file
+
+    info = import_file(args.data_dir or default_data_dir(), args.symbol, args.file, args.timezone)
+    print(f"imported {info['ticks']:,} ticks of {info['symbol']}: "
+          f"{info['first']:%Y-%m-%d %H:%M:%S} to {info['last']:%Y-%m-%d %H:%M:%S} UTC")
+    print("In the browser app, tick 'Use my imported data' (or use the same pair and period).")
+    return 0
+
+
+def _cmd_imports(args) -> int:
+    from fxtm.importer import list_datasets
+
+    datasets = list_datasets(args.data_dir or default_data_dir())
+    if not datasets:
+        print("no imported data yet (see: fxtm import --help)")
+    for d in datasets:
+        print(f"{d['symbol']}  {d['first']:%Y-%m-%d %H:%M:%S} to {d['last']:%Y-%m-%d %H:%M:%S} UTC  {d['ticks']:,} ticks")
+    return 0
+
+
 def _cmd_serve(args) -> int:
     from fxtm.webapp import serve  # imported lazily: the CLI works without the web app
 
@@ -69,6 +92,15 @@ def main(argv=None) -> int:
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--no-browser", action="store_true", help="do not open a browser tab")
     serve.set_defaults(func=_cmd_serve)
+
+    imp = sub.add_parser("import", help="import a tick CSV file you downloaded yourself")
+    imp.add_argument("file", help="CSV with time, bid and ask columns")
+    imp.add_argument("symbol", help="currency pair of the file, e.g. EUR/CHF")
+    imp.add_argument("--timezone", default="UTC", help="time zone of the times in the file (default: UTC)")
+    imp.set_defaults(func=_cmd_import)
+
+    listing = sub.add_parser("imports", help="list imported datasets")
+    listing.set_defaults(func=_cmd_imports)
 
     fetch = sub.add_parser("fetch", help="download and cache ticks")
     add_range(fetch)

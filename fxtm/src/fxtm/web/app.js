@@ -44,6 +44,11 @@ const I18N = {
     evRejected: 'Order #{ref} rejected: {note}', evModify: 'Position #{ref} updated ({note})',
     errNumber: 'Enter a number.', errUnits: 'Enter the number of units.', errPrice: 'Enter a price for this order type.',
     errDate: 'Use the format YYYY-MM-DD HH:MM.', buySide: 'Buy', sellSide: 'Sell',
+    ownData: 'Your own data files',
+    ownDataHelp: "If the download does not work, export ticks to a CSV file (for example in your browser from Dukascopy's historical data page) and import it here. The file needs time, bid and ask columns.",
+    csvFile: 'Tick CSV file', csvTz: 'Time zone of the file', importBtn: 'Import for the pair above',
+    importing: 'Importing...', importedOk: 'Imported {n} ticks: {a} to {b} UTC', useImported: 'Use my imported data',
+    datasets: 'Imported data (click to use)', datasetsEmpty: 'No imported data yet.', errFile: 'Choose a file first.',
   },
   ja: {
     play: '再生', pause: '一時停止', tick: '1ティック進む', minute: '1分進む', hour: '1時間進む', speed: '速度',
@@ -84,6 +89,11 @@ const I18N = {
     evRejected: '注文 #{ref} は拒否されました: {note}', evModify: 'ポジション #{ref} を変更しました ({note})',
     errNumber: '数値を入力してください。', errUnits: '数量を入力してください。', errPrice: 'この注文には価格が必要です。',
     errDate: 'YYYY-MM-DD HH:MM の形式で入力してください。', buySide: '買い', sellSide: '売り',
+    ownData: '手元のデータファイルを使う',
+    ownDataHelp: 'ダウンロードがうまくいかない場合は、ブラウザなどでティックをCSVに書き出して、ここに読み込みます (例: Dukascopyのヒストリカルデータのページ)。時刻・Bid・Askの列が必要です。',
+    csvFile: 'ティックのCSVファイル', csvTz: 'ファイルの時刻の時間帯', importBtn: '上の通貨ペアとして読み込む',
+    importing: '読み込み中...', importedOk: '{n} ティックを読み込みました: {a} 〜 {b} (UTC)', useImported: '読み込んだデータを使う',
+    datasets: '読み込んだデータ (クリックで選択)', datasetsEmpty: '読み込んだデータはまだありません。', errFile: '先にファイルを選んでください。',
   },
 };
 
@@ -608,6 +618,40 @@ function resetChartState() {
   view.off = 0;
 }
 
+/* ---------- own data files ---------- */
+const utcStr = (ms) => new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+function renderDatasets() {
+  const box = $('#datasetList'), list = S.datasets || [];
+  if (!list.length) { box.innerHTML = `<span class="hint">${esc(t('datasetsEmpty'))}</span>`; return; }
+  box.innerHTML = list.map((d, i) =>
+    `<button type="button" class="chip" data-ds="${i}">${esc(d.symbol.slice(0, 3) + '/' + d.symbol.slice(3))}
+     ${utcStr(d.first)} → ${utcStr(d.last)} (${d.ticks.toLocaleString()})</button>`).join('');
+}
+async function loadDatasets() {
+  try { S.datasets = (await api('/api/datasets')).datasets; renderDatasets(); } catch { /* ignore */ }
+}
+function useDataset(d) {
+  const end = Math.min(Math.ceil((d.last + 1) / 60000) * 60000, d.first + 7 * 86400000);
+  $('#fSymbol').value = d.symbol.slice(0, 3) + '/' + d.symbol.slice(3);
+  $('#fStart').value = utcStr(d.first); $('#fEnd').value = utcStr(end);
+  $('#fUseImported').checked = true;
+}
+async function importFile() {
+  const file = $('#fFile').files[0], status = $('#importStatus');
+  if (!file) { status.textContent = t('errFile'); return; }
+  status.textContent = t('importing');
+  $('#btnImport').disabled = true;
+  try {
+    const url = `/api/import?symbol=${encodeURIComponent($('#fSymbol').value)}&timezone=${encodeURIComponent($('#fFileTz').value)}`;
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+    const data = await res.json().catch(() => ({ error: res.statusText }));
+    if (!res.ok) throw new Error(data.error);
+    status.textContent = t('importedOk', { n: data.ticks.toLocaleString(), a: utcStr(data.first), b: utcStr(data.last) });
+    await loadDatasets();
+    useDataset({ symbol: data.symbol, first: data.first, last: data.last });
+  } catch (e) { status.textContent = e.message; } finally { $('#btnImport').disabled = false; }
+}
+
 /* ---------- setup ---------- */
 function utcField(id) {
   const v = $(id).value.trim();
@@ -625,6 +669,7 @@ async function startSession(ev) {
       currency: $('#fCurrency').value, balance: $('#fBalance').value, leverage: $('#fLeverage').value,
       stop_out_pct: $('#fStopOut').value, slippage_pips: $('#fSlip').value, extra_spread_pips: $('#fSpread').value,
       latency_s: $('#fLatency').value, fixed_rate: $('#fFixed').value,
+      use_imported: $('#fUseImported').checked,
     };
     $('#btnStart').disabled = true;
     status.textContent = t('loading');
@@ -639,6 +684,7 @@ async function startSession(ev) {
     S.st = null; apply(st);
   } catch (e) {
     err.textContent = e.message; err.hidden = false;
+    if (/own data files|imported/i.test(e.message)) $('#ownData').open = true;
   } finally {
     clearInterval(timer);
     $('#btnStart').disabled = false; status.textContent = '';
@@ -657,6 +703,12 @@ function init() {
     S.tz = e.target.value; store.set('fxtm.tz', S.tz); S.histKey = ''; if (S.st) render();
   });
   $('#setupForm').addEventListener('submit', startSession);
+  $('#btnImport').addEventListener('click', importFile);
+  $('#datasetList').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-ds]');
+    if (b) useDataset(S.datasets[Number(b.dataset.ds)]);
+  });
+  loadDatasets();
   $$('.chip').forEach((b) => b.addEventListener('click', () => {
     $('#fSymbol').value = b.dataset.sym; $('#fStart').value = b.dataset.start; $('#fEnd').value = b.dataset.end;
   }));

@@ -139,6 +139,42 @@ class WebAppTests(unittest.TestCase):
         spread = lambda s: s["quote"]["ask"] - s["quote"]["bid"]
         self.assertAlmostEqual(spread(wide) - spread(plain), 0.001, places=6)
 
+    def upload(self, symbol, text, timezone="UTC"):
+        url = f"http://127.0.0.1:{self.port}/api/import?symbol={symbol}&timezone={timezone}"
+        req = urllib.request.Request(url, data=text.encode(), method="POST",
+                                     headers={"Content-Type": "application/octet-stream"})
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
+    def test_import_a_csv_and_trade_it(self):
+        rows = "".join(f"2024-03-04 12:{m:02d}:{s:02d},1.1000,1.1002\n" for m in range(0, 30) for s in (0, 30))
+        code, info = self.upload("EUR/USD", "Gmt time,Bid,Ask\n".replace("Gmt time", "time") + rows)
+        self.assertEqual((code, info["ticks"]), (200, 60))
+        code, listing = self.call("/api/datasets")
+        self.assertEqual(code, 200)
+        self.assertTrue(any(d["symbol"] == "EURUSD" and d["ticks"] == 60 for d in listing["datasets"]))
+
+        code, st = self.start(start="2024-03-04 12:00", end="2024-03-04 12:30", use_imported=True)
+        self.assertEqual(code, 200)
+        self.assertAlmostEqual(st["quote"]["bid"], 1.1000)  # the file's data, not the synthetic provider's
+        code, st = self.call("/api/order", {"side": "buy", "units": 1000, "kind": "market"})
+        self.assertEqual(code, 200)
+
+    def test_imported_source_explains_missing_coverage(self):
+        code, body = self.start(symbol="GBP/USD", start="2024-03-05 10:00", end="2024-03-05 11:00", use_imported=True)
+        self.assertEqual(code, 400)
+        self.assertIn("imported files", body["error"])
+
+    def test_bad_uploads_are_explained(self):
+        self.assertEqual(self.upload("EUR/USD", "")[0], 400)
+        code, body = self.upload("EUR/USD", "foo,bar\n1,2\n")
+        self.assertEqual(code, 400)
+        self.assertIn("column", body["error"])
+        self.assertEqual(self.upload("", "time,bid,ask\n")[0], 400)
+
     def test_other_hosts_and_origins_are_rejected(self):
         code, _ = self.call("/api/status", headers={"Host": "evil.example"})
         self.assertEqual(code, 403)

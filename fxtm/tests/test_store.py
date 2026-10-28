@@ -38,6 +38,22 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(self.store.load_day("EURUSD", date(2024, 3, 9)).empty)
         self.assertEqual(self.provider.calls, calls)
 
+    def test_empty_weekday_is_not_trusted(self):
+        # Monday 2024-03-11 has no ticks in the fake data: probably a failed download, so never cache it
+        monday = date(2024, 3, 11)
+        self.assertTrue(self.store.load_day("EURUSD", monday).empty)
+        calls = self.provider.calls
+        self.store.load_day("EURUSD", monday)
+        self.assertEqual(self.provider.calls, calls + 1)
+
+    def test_empty_weekday_left_on_disk_is_fetched_again(self):
+        monday = date(2024, 3, 4)
+        stale = self.store._path("EURUSD", monday, self.store.fmt)  # an empty file from an older failed run
+        from fxtm.store import write_ticks
+        from fxtm.ticks import empty_ticks
+        write_ticks(stale, empty_ticks(), self.store.fmt)
+        self.assertEqual(len(self.store.load_day("EURUSD", monday)), 2)  # real ticks, not the stale emptiness
+
     def test_unfinished_day_is_not_cached(self):
         store = TickStore(self.tmp.name, self.provider, now=lambda: utc(2024, 3, 4, 12))
         store.load_day("EURUSD", date(2024, 3, 4))

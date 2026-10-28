@@ -71,6 +71,11 @@ details { margin-top: 18px; }
 summary { cursor: pointer; font-weight: 600; margin-bottom: 10px; }
 .hint { color: var(--ink-soft); margin: 8px 0 0; max-width: 62ch; }
 .actions { display: flex; align-items: center; gap: 14px; margin-top: 24px; }
+.actions.tight { margin-top: 12px; }
+.check-line { margin-top: 12px; color: var(--ink); }
+.datasets { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+#datasetList { display: flex; flex-wrap: wrap; gap: 6px; }
+input[type=file] { padding: 4px; }
 .status { color: var(--ink-soft); }
 .error { color: var(--down); margin: 10px 0 0; }
 

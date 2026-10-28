@@ -83,6 +83,22 @@
       <p class="hint" data-i18n="fixedRateHelp">Profit is converted to the account currency using live prices of the conversion pair. Enter a rate only if you prefer a constant one.</p>
     </details>
 
+    <details id="ownData">
+      <summary data-i18n="ownData">Your own data files</summary>
+      <p class="hint" data-i18n="ownDataHelp">If the download does not work, export ticks to a CSV file (for example in your browser from Dukascopy's historical data page) and import it here. The file needs time, bid and ask columns.</p>
+      <div class="grid-3">
+        <label class="field span-2"><span data-i18n="csvFile">Tick CSV file</span><input type="file" id="fFile" accept=".csv,.txt,text/csv"></label>
+        <label class="field"><span data-i18n="csvTz">Time zone of the file</span>
+          <select id="fFileTz"><option value="UTC">UTC</option><option value="Asia/Tokyo">Asia/Tokyo</option><option value="Europe/London">Europe/London</option><option value="Europe/Zurich">Europe/Zurich</option><option value="America/New_York">America/New_York</option></select></label>
+      </div>
+      <div class="actions tight">
+        <button type="button" id="btnImport" data-i18n="importBtn">Import for the pair above</button>
+        <span class="status" id="importStatus" role="status"></span>
+      </div>
+      <label class="check check-line"><input type="checkbox" id="fUseImported"><span data-i18n="useImported">Use my imported data</span></label>
+      <div class="datasets"><span class="hint" data-i18n="datasets">Imported data (click to use)</span><div id="datasetList"></div></div>
+    </details>
+
     <div class="actions">
       <button type="submit" class="primary big" id="btnStart" data-i18n="startBtn">Load data and start</button>
       <span id="setupStatus" class="status" role="status"></span>

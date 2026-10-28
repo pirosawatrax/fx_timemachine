@@ -1,8 +1,10 @@
 """Local tick cache: one file per symbol and UTC day.
 
-Parquet is used when pyarrow is installed, gzip CSV otherwise. A day that was
-fully fetched is stored even when it has no ticks (weekends), so it is never
-downloaded twice. The current, unfinished UTC day is never cached.
+Parquet is used when pyarrow is installed, gzip CSV otherwise. A finished UTC day is
+stored once it was fetched, so it is never downloaded twice. An empty day is only
+trusted on Saturday (UTC), when the market is really closed: an empty Monday-Friday
+is more likely a failed or blocked download, so it is neither stored nor believed
+when found on disk. The current, unfinished UTC day is never cached either.
 """
 from __future__ import annotations
 
@@ -32,13 +34,40 @@ def default_data_dir() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share") / "fxtm"
 
 
+def has_pyarrow() -> bool:
+    return importlib.util.find_spec("pyarrow") is not None
+
+
+def read_ticks(path: Path) -> pd.DataFrame:
+    """Read a tick file written by ``write_ticks`` (parquet or gzip CSV)."""
+    df = pd.read_parquet(path) if path.name.endswith(".parquet") else pd.read_csv(path)
+    if df.empty:
+        return empty_ticks()
+    df = df[TICK_COLUMNS].copy()
+    df["time"] = pd.to_datetime(df["time"], utc=True, format="ISO8601").dt.as_unit("ns")
+    return df.reset_index(drop=True)
+
+
+def write_ticks(path: Path, ticks: pd.DataFrame, fmt: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    if fmt == "parquet":
+        ticks.to_parquet(tmp, index=False)
+    else:
+        ticks.to_csv(tmp, index=False, compression="gzip")
+    os.replace(tmp, path)  # atomic: a half-written file is never visible
+
+
+def _empty_is_believable(day) -> bool:
+    return day.weekday() == 5  # Saturday
+
+
 class TickStore:
     def __init__(self, root, provider, now=None):
         self.root = Path(root)
         self.provider = provider
         self._now = now or (lambda: datetime.now(timezone.utc))
-        has_pyarrow = importlib.util.find_spec("pyarrow") is not None
-        self.fmt = "parquet" if has_pyarrow else "csv.gz"
+        self.fmt = "parquet" if has_pyarrow() else "csv.gz"
 
     def _path(self, symbol: str, day, fmt: str) -> Path:
         return (
@@ -55,36 +84,25 @@ class TickStore:
 
     @staticmethod
     def _read(path: Path) -> pd.DataFrame:
-        if path.name.endswith(".parquet"):
-            df = pd.read_parquet(path)
-        else:
-            df = pd.read_csv(path)
-        if df.empty:
-            return empty_ticks()
-        df = df[TICK_COLUMNS].copy()
-        df["time"] = pd.to_datetime(df["time"], utc=True, format="ISO8601").dt.as_unit("ns")
-        return df.reset_index(drop=True)
+        return read_ticks(path)
 
     def _write(self, symbol: str, day, ticks: pd.DataFrame) -> None:
-        path = self._path(symbol, day, self.fmt)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        if self.fmt == "parquet":
-            ticks.to_parquet(tmp, index=False)
-        else:
-            ticks.to_csv(tmp, index=False, compression="gzip")
-        os.replace(tmp, path)  # atomic: a half-written file is never visible
+        write_ticks(self._path(symbol, day, self.fmt), ticks, self.fmt)
 
     def load_day(self, symbol: str, day, refresh: bool = False) -> pd.DataFrame:
         """All ticks of one UTC day, from the cache or from the provider."""
         if not refresh:
             cached = self._existing(symbol, day)
             if cached is not None:
-                return self._read(cached)
+                ticks = self._read(cached)
+                if not ticks.empty or _empty_is_believable(day):
+                    return ticks
+                # an empty weekday on disk is probably left over from a failed download: fetch again
         day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
         day_end = day_start + timedelta(days=1)
         ticks = self.provider.fetch_ticks(symbol, day_start, day_end)
-        if day_end <= self._now():
+        cacheable = getattr(self.provider, "cacheable", True)
+        if cacheable and day_end <= self._now() and (not ticks.empty or _empty_is_believable(day)):
             self._write(symbol, day, ticks)
         return ticks
 

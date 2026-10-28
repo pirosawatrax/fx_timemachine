@@ -18,6 +18,15 @@ First public version.
 - Browser app (`fxtm serve`): chart, replay controls, order ticket, positions, history, report; English and Japanese.
 - Command line tools: `fxtm serve`, `fxtm fetch`, `fxtm candles`.
 
+### Reliability
+- HTTP 202 (bot-protection challenge) and other non-200 answers from the feed are errors that are retried and
+  explained; they are never read as "no ticks". Concurrency is limited to 2 requests.
+- Hour-by-hour download: hours that worked are kept in a `raw` cache, failed hours are retried in later
+  rounds, and a new attempt continues from the saved hours instead of starting over.
+- An empty weekday is neither stored nor believed when found on disk (only Saturdays can be truly empty).
+- Import of your own tick CSV files (`fxtm import`, and "Your own data files" in the browser app) as a way
+  around feed outages.
+
 ### Known limitations
 - No swap/rollover or commission. Daily candles roll at 00:00 UTC. Sessions only move forward.
 - Not yet verified against live Dukascopy downloads by the project's own tests (they use synthetic data).
