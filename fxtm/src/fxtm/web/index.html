@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FX Time Machine</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">FX Time Machine</div>
+  <div class="clock" id="clock" hidden>
+    <span class="clock-date" id="clockDate"></span>
+    <span class="clock-time" id="clockTime"></span>
+    <span class="clock-tz" id="clockTz"></span>
+  </div>
+  <div class="transport" id="transport" hidden>
+    <button id="btnPlay" class="primary" data-i18n="play">Play</button>
+    <button id="btnTick" data-i18n="tick">+1 tick</button>
+    <button id="btnMin" data-i18n="minute">+1 min</button>
+    <button id="btnHour" data-i18n="hour">+1 hour</button>
+    <label class="field-inline"><span data-i18n="speed">Speed</span>
+      <select id="speed">
+        <option value="1">1x</option><option value="10">10x</option>
+        <option value="60" selected>60x</option><option value="300">300x</option>
+        <option value="1200">1200x</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" id="pauseOnClose" checked><span data-i18n="pauseOnClose">Pause when a position closes</span></label>
+    <button id="btnJump" data-i18n="jump">Jump to time</button>
+    <button id="btnRestart" data-i18n="restart">Restart</button>
+  </div>
+  <div class="prefs">
+    <select id="lang" aria-label="Language"><option value="en">English</option><option value="ja">日本語</option></select>
+    <select id="tz" aria-label="Time zone">
+      <option value="UTC">UTC</option><option value="Asia/Tokyo">Tokyo</option>
+      <option value="Europe/London">London</option><option value="America/New_York">New York</option>
+    </select>
+  </div>
+</header>
+
+<main id="setup" class="setup">
+  <form id="setupForm" class="setup-card" autocomplete="off">
+    <h1 data-i18n="setupTitle">Pick a pair and a moment in the past</h1>
+    <p class="lede" data-i18n="setupHelp">Ticks are downloaded once from Dukascopy to this computer and reused offline. All times are UTC.</p>
+
+    <div class="grid-3">
+      <label class="field"><span data-i18n="pair">Currency pair</span>
+        <input id="fSymbol" list="pairs" value="EUR/CHF" required>
+        <datalist id="pairs"><option value="EUR/USD"><option value="USD/JPY"><option value="GBP/USD"><option value="EUR/JPY"><option value="GBP/JPY"><option value="AUD/USD"><option value="EUR/CHF"><option value="USD/CHF"><option value="CHF/JPY"></datalist>
+      </label>
+      <label class="field"><span data-i18n="startUtc">Start (UTC)</span>
+        <input id="fStart" value="2015-01-15 09:00" placeholder="YYYY-MM-DD HH:MM" required></label>
+      <label class="field"><span data-i18n="endUtc">End (UTC)</span>
+        <input id="fEnd" value="2015-01-15 12:00" placeholder="YYYY-MM-DD HH:MM" required></label>
+    </div>
+    <div class="examples">
+      <span data-i18n="examples">Examples</span>
+      <button type="button" class="chip" data-sym="EUR/CHF" data-start="2015-01-15 09:00" data-end="2015-01-15 12:00" data-i18n="exSnb">Swiss franc shock, 2015</button>
+      <button type="button" class="chip" data-sym="GBP/USD" data-start="2016-06-23 22:00" data-end="2016-06-24 06:00" data-i18n="exBrexit">Brexit vote night, 2016</button>
+    </div>
+
+    <h2 data-i18n="account">Practice account</h2>
+    <div class="grid-3">
+      <label class="field"><span data-i18n="currency">Account currency</span>
+        <select id="fCurrency"><option>JPY</option><option>USD</option><option>EUR</option><option>GBP</option><option>CHF</option><option>AUD</option></select></label>
+      <label class="field"><span data-i18n="balance">Starting balance</span>
+        <input id="fBalance" type="number" min="1" step="any" value="1000000"></label>
+      <label class="field"><span data-i18n="leverage">Leverage</span>
+        <input id="fLeverage" type="number" min="1" step="any" value="25" list="levs">
+        <datalist id="levs"><option value="1"><option value="5"><option value="10"><option value="25"><option value="50"><option value="100"></datalist></label>
+    </div>
+
+    <details>
+      <summary data-i18n="advanced">Trading conditions</summary>
+      <div class="grid-3">
+        <label class="field"><span data-i18n="extraSpread">Extra spread (pips)</span><input id="fSpread" type="number" min="0" step="any" value="0"></label>
+        <label class="field"><span data-i18n="slippage">Slippage (pips)</span><input id="fSlip" type="number" min="0" step="any" value="0"></label>
+        <label class="field"><span data-i18n="latency">Order delay (seconds)</span><input id="fLatency" type="number" min="0" step="any" value="0"></label>
+        <label class="field"><span data-i18n="stopOut">Stop-out level (%)</span><input id="fStopOut" type="number" min="0" step="any" value="100"></label>
+        <label class="field span-2"><span data-i18n="fixedRate">Fixed conversion rate (optional)</span><input id="fFixed" type="number" min="0" step="any" placeholder="e.g. 150"></label>
+      </div>
+      <p class="hint" data-i18n="fixedRateHelp">Profit is converted to the account currency using live prices of the conversion pair. Enter a rate only if you prefer a constant one.</p>
+    </details>
+
+    <div class="actions">
+      <button type="submit" class="primary big" id="btnStart" data-i18n="startBtn">Load data and start</button>
+      <span id="setupStatus" class="status" role="status"></span>
+    </div>
+    <p id="setupError" class="error" role="alert" hidden></p>
+  </form>
+</main>
+
+<main id="workspace" class="workspace" hidden>
+  <section class="panel chart-panel">
+    <div class="chart-head">
+      <strong id="pairLabel"></strong>
+      <div class="seg" id="tfSeg">
+        <button data-tf="1m" class="on">1m</button><button data-tf="5m">5m</button>
+        <button data-tf="15m">15m</button><button data-tf="1h">1h</button><button data-tf="1d">1d</button>
+      </div>
+      <span class="ohlc" id="ohlc"></span>
+    </div>
+    <div class="chart-wrap"><canvas id="chart" aria-label="Candlestick chart"></canvas></div>
+  </section>
+
+  <aside class="side">
+    <section class="panel ticket">
+      <div class="seg wide" id="kindSeg">
+        <button data-kind="market" class="on" data-i18n="market">Market</button>
+        <button data-kind="limit" data-i18n="limit">Limit</button>
+        <button data-kind="stop" data-i18n="stop">Stop</button>
+      </div>
+      <label class="field"><span data-i18n="units">Units</span>
+        <input id="tUnits" type="number" min="1" step="1" value="10000"></label>
+      <div class="quick" id="quickUnits"><button data-u="1000">1k</button><button data-u="10000">10k</button><button data-u="100000">100k</button></div>
+      <label class="field" id="priceRow" hidden><span data-i18n="price">Price</span><input id="tPrice" type="number" step="any"></label>
+      <div class="levels">
+        <label class="field"><span data-i18n="sl">Stop-loss</span>
+          <span class="with-mode"><input id="tSl" type="number" step="any"><select id="tSlMode"><option value="pips">pips</option><option value="price" data-i18n="modePrice">price</option></select></span></label>
+        <label class="field"><span data-i18n="tp">Take-profit</span>
+          <span class="with-mode"><input id="tTp" type="number" step="any"><select id="tTpMode"><option value="pips">pips</option><option value="price" data-i18n="modePrice">price</option></select></span></label>
+      </div>
+      <div class="trade-buttons">
+        <button id="btnSell" class="sell"><span class="b-label" id="sellLabel">Sell</span><span class="b-price" id="sellPrice">-</span></button>
+        <button id="btnBuy" class="buy"><span class="b-label" id="buyLabel">Buy</span><span class="b-price" id="buyPrice">-</span></button>
+      </div>
+      <p class="margin-line" id="marginLine"></p>
+      <p class="error" id="ticketError" role="alert" hidden></p>
+    </section>
+
+    <section class="panel account">
+      <dl>
+        <div><dt data-i18n="aBalance">Balance</dt><dd id="aBalance">-</dd></div>
+        <div><dt data-i18n="aEquity">Equity</dt><dd id="aEquity" class="strong">-</dd></div>
+        <div><dt data-i18n="aFloating">Floating profit</dt><dd id="aFloating">-</dd></div>
+        <div><dt data-i18n="aUsed">Margin used</dt><dd id="aUsed">-</dd></div>
+        <div><dt data-i18n="aFree">Margin free</dt><dd id="aFree">-</dd></div>
+        <div><dt data-i18n="aLevel">Margin level</dt><dd id="aLevel">-</dd></div>
+      </dl>
+    </section>
+  </aside>
+
+  <section class="panel tabs-panel">
+    <div class="tablist" role="tablist" id="tablist">
+      <button role="tab" data-tab="positions" class="on"><span data-i18n="tabPositions">Positions</span> <span class="count" id="cPositions"></span></button>
+      <button role="tab" data-tab="orders"><span data-i18n="tabOrders">Orders</span> <span class="count" id="cOrders"></span></button>
+      <button role="tab" data-tab="history"><span data-i18n="tabHistory">History</span> <span class="count" id="cHistory"></span></button>
+      <button role="tab" data-tab="report" data-i18n="tabReport">Report</button>
+      <button role="tab" data-tab="log" data-i18n="tabLog">Log</button>
+    </div>
+    <div class="tabbody" id="tab-positions"></div>
+    <div class="tabbody" id="tab-orders" hidden></div>
+    <div class="tabbody" id="tab-history" hidden></div>
+    <div class="tabbody" id="tab-report" hidden>
+      <div class="report-actions">
+        <button id="btnReport" data-i18n="updateReport">Update report</button>
+        <button id="btnSave" data-i18n="saveRun">Save this run</button>
+        <span class="status" id="saveStatus"></span>
+      </div>
+      <div class="report-grid">
+        <dl id="reportStats"></dl>
+        <div><canvas id="eq" aria-label="Equity curve"></canvas></div>
+      </div>
+    </div>
+    <div class="tabbody" id="tab-log" hidden></div>
+  </section>
+</main>
+
+<dialog id="jumpDialog">
+  <form method="dialog" id="jumpForm">
+    <label class="field"><span data-i18n="jumpHelp">Move forward to (UTC)</span>
+      <input id="jumpTo" placeholder="YYYY-MM-DD HH:MM" required></label>
+    <p class="hint" data-i18n="jumpNote">Time only moves forward during a session. Restart to go back.</p>
+    <div class="actions"><button type="submit" class="primary" data-i18n="go">Go</button><button type="button" id="jumpCancel" data-i18n="cancel">Cancel</button></div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>

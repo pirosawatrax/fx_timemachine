@@ -1,0 +1,64 @@
+import lzma
+import struct
+import unittest
+
+from fxtm.providers import DukascopyProvider, decode_bi5, hour_url, price_divisor
+from fxtm.ticks import ProviderError
+
+from helpers import ns, utc
+
+
+def bi5(records):
+    """records: (ms, ask_int, bid_int, ask_vol, bid_vol)."""
+    raw = b"".join(struct.pack(">IIIff", *r) for r in records)
+    return lzma.compress(raw, format=lzma.FORMAT_ALONE)
+
+
+class ProviderTests(unittest.TestCase):
+    def test_url_months_start_at_zero(self):
+        url = hour_url("EUR/CHF", utc(2015, 1, 15, 9))
+        self.assertTrue(url.endswith("/EURCHF/2015/00/15/09h_ticks.bi5"))
+
+    def test_price_divisor(self):
+        self.assertEqual(price_divisor("USD/JPY"), 1_000)
+        self.assertEqual(price_divisor("EUR/USD"), 100_000)
+
+    def test_decode(self):
+        raw = bi5([(0, 107125, 107123, 1.5, 2.5), (1500, 107130, 107128, 1.0, 1.0)])
+        df = decode_bi5(raw, utc(2024, 3, 4, 10), 100_000)
+        self.assertEqual(len(df), 2)
+        self.assertAlmostEqual(df.loc[0, "bid"], 1.07123)
+        self.assertAlmostEqual(df.loc[0, "ask"], 1.07125)
+        self.assertEqual(df.loc[0, "bid_vol"], 2.5)
+        self.assertEqual(int(df["time"].iloc[1].value) - int(df["time"].iloc[0].value), 1_500_000_000)
+        self.assertEqual(int(df["time"].iloc[0].value), ns(utc(2024, 3, 4, 10)))
+
+    def test_decode_empty_and_corrupt(self):
+        self.assertTrue(decode_bi5(b"", utc(2024, 3, 4, 10), 100_000).empty)
+        with self.assertRaises(ProviderError):
+            decode_bi5(b"not lzma", utc(2024, 3, 4, 10), 100_000)
+
+    def test_fetch_filters_range_and_skips_missing_hours(self):
+        urls = []
+
+        def fake_get(url):
+            urls.append(url)
+            if "10h_ticks" in url:
+                return bi5([(0, 107125, 107123, 1, 1), (1_800_000, 107130, 107128, 1, 1)])
+            return None  # 404: no data
+
+        provider = DukascopyProvider(get=fake_get, now=lambda: utc(2024, 3, 5))
+        df = provider.fetch_ticks("EUR/USD", utc(2024, 3, 4, 9), utc(2024, 3, 4, 11))
+        self.assertEqual(len(urls), 2)  # hours 09 and 10
+        self.assertEqual(len(df), 2)
+        df = provider.fetch_ticks("EUR/USD", utc(2024, 3, 4, 10, 15), utc(2024, 3, 4, 11))
+        self.assertEqual(len(df), 1)  # the tick at 10:30 only
+
+    def test_unfinished_hours_are_not_requested(self):
+        provider = DukascopyProvider(get=lambda url: self.fail("must not download"),
+                                     now=lambda: utc(2024, 3, 4, 10, 30))
+        self.assertTrue(provider.fetch_ticks("EURUSD", utc(2024, 3, 4, 10), utc(2024, 3, 4, 11)).empty)
+
+
+if __name__ == "__main__":
+    unittest.main()

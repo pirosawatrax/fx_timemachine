@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fxtm"
+dynamic = ["version"]
+description = "FX Time Machine: replay historical forex ticks and practice virtual trading offline."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "FX Time Machine contributors" }]
+keywords = ["forex", "fx", "backtest", "replay", "simulator", "education", "tick data"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Education",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Education",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = ["pandas>=2.0", "numpy>=1.24", "pyarrow>=14"]
+
+# Fill in once the repository exists:
+# [project.urls]
+# Homepage = "https://github.com/OWNER/REPO"
+# Issues = "https://github.com/OWNER/REPO/issues"
+
+[project.scripts]
+fxtm = "fxtm.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "fxtm.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fxtm = ["web/*"]
